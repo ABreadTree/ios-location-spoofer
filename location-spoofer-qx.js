@@ -369,17 +369,27 @@
       var config = loadConfig();
       try {
         if (!config.enabled) { $done({}); return; }
-        // QX: $response.body 是 base64 编码的二进制
-        var rawBody = $response.body;
-        if (!rawBody) { $done({}); return; }
-        var responseBytes = base64ToBytes(rawBody);
-        if (!responseBytes || responseBytes.length < 2) { $done({}); return; }
+        // QX v1.0.19+ 起二进制响应走 $response.bodyBytes(ArrayBuffer)，
+        // $response.body 对二进制是空/乱码文本。详见 crossutility/Quantumult-X
+        // 的 sample-bytes-rewrite.js。
+        var rawBuf = $response.bodyBytes;
+        if (!rawBuf || (rawBuf.byteLength !== undefined && rawBuf.byteLength === 0)) {
+          $done({});
+          return;
+        }
+        var responseBytes = rawBuf instanceof Uint8Array ? rawBuf : new Uint8Array(rawBuf);
+        if (responseBytes.length < 2) { $done({}); return; }
         if (config.debug) console.log("Location spoofer QX response: " + responseBytes.length + " bytes, head=" + hexPreview(responseBytes, 32));
         var result = spoofAppleResponse(responseBytes, config);
         if (config.debug) console.log("Location spoofer patched " + result.wifiCount + " wifi, " + result.cellCount + " cell, kind=" + result.kind + ", response=" + result.response.length + " bytes");
         if (config.debug) console.log("Location spoofer locations: " + patchedPayloadSummary(result.payload));
-        // QX: $done body 必须是 base64 字符串
-        $done({ body: bytesToBase64(result.response) });
+        // QX: 二进制改后响应必须用 $done({bodyBytes: ArrayBuffer}) 回写
+        $done({
+          bodyBytes: result.response.buffer.slice(
+            result.response.byteOffset,
+            result.response.byteOffset + result.response.byteLength
+          )
+        });
       } catch (err) {
         if (config.debug) console.log("Location spoofer failed: " + err.message);
         $done({});
