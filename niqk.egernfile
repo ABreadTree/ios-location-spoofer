@@ -1,7 +1,7 @@
 #!name=iOS Location Spoofer
 #!desc=Spoof Apple / AutoNavi /clls/wloc location response
 #!category=Location
-#!arguments = mode:"response",latitude:"37.3349",longitude:"-122.00902",horizontalAccuracy:"39",verticalAccuracy:"1000",altitude:"530",debug:false
+#!arguments = mode:"response",latitude:"30.271287",longitude:"120.200676",horizontalAccuracy:"39",verticalAccuracy:"1000",altitude:"530",debug:false
 #!arguments-desc = mode: 工作模式，默认 response\nlatitude: 纬度，例如 31.230416\nlongitude: 经度，例如 121.473701\nhorizontalAccuracy: 水平精度，默认 39\nverticalAccuracy: 垂直精度，默认 1000\naltitude: 海拔，单位米\ndebug: 调试日志，默认 false
 
 
