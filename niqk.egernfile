@@ -4,8 +4,9 @@
 #!arguments = mode:"response",latitude:"37.3349",longitude:"-122.00902",horizontalAccuracy:"39",verticalAccuracy:"1000",altitude:"530",debug:false
 #!arguments-desc = mode: 工作模式，默认 response\nlatitude: 纬度，例如 31.230416\nlongitude: 经度，例如 121.473701\nhorizontalAccuracy: 水平精度，默认 39\nverticalAccuracy: 垂直精度，默认 1000\naltitude: 海拔，单位米\ndebug: 调试日志，默认 false
 
+
 [Script]
-iOS Location Spoofer = type=http-response,pattern=^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/mekos2772/ios-location-spoofer/main/location-spoofer.js,argument=mode={{{mode}}}&latitude={{{latitude}}}&longitude={{{longitude}}}&horizontalAccuracy={{{horizontalAccuracy}}}&verticalAccuracy={{{verticalAccuracy}}}&altitude={{{altitude}}}&debug={{{debug}}}
+iOS Location Spoofer = type=http-response,pattern=^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/mekos2772/ios-location-spoofer/main/location-spoofer.js,argument=mode=response&latitude=37.3349&longitude=-122.00902&horizontalAccuracy=39&verticalAccuracy=1000&altitude=530&debug=false
 
 [MITM]
 hostname = %APPEND% gs-loc.apple.com, gs-loc-cn.apple.com, bluedot.is.autonavi.com, bluedot.is.autonavi.com.gds.alibabadns.com
