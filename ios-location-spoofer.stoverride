@@ -25,7 +25,7 @@ http:
       binary-mode: true
       max-size: 1048576
       timeout: 10
-      argument: &configUrl=https://loc-spoofer.niqk.org/loc.json?token=e6148c7370a20eda74638a4d2b6718fbe3194e6a02c864818c648849a4433a84
+      argument: "configUrl=https://loc-spoofer.niqk.org/loc.json?token=e6148c7370a20eda74638a4d2b6718fbe3194e6a02c864818c648849a4433a84"
   mitm:
     - gs-loc.apple.com
     - gs-loc-cn.apple.com
