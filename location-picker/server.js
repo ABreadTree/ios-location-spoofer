@@ -25,10 +25,12 @@ const fs = require("fs");
 const path = require("path");
 
 const PORT = process.env.PORT || 8080;
-const TOKEN = process.env.TOKEN || "change-me-please"; // 部署时务必改成随机字符串
+const HOST = process.env.HOST || "127.0.0.1";           // 默认仅本机监听，由 Caddy/nginx 反代暴露
+const TOKEN = process.env["TOKEN"] || "";             // 必须由环境变量提供；缺失时拒绝启动
 const CERT = process.env.CERT || "";                   // https 证书 fullchain 路径（留空=http）
 const KEY = process.env.KEY || "";                     // https 私钥路径
 const DATA_FILE = path.join(__dirname, "loc.json");
+const FAV_FILE = path.join(__dirname, "favorites.json");
 
 // 字段名/默认值与 location-spoofer.js 的 DEFAULT_CONFIG 对齐
 const DEFAULT = {
@@ -50,6 +52,31 @@ function readLoc() {
 
 function writeLoc(obj) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(obj, null, 2));
+}
+
+function readFavs() {
+  try {
+    const a = JSON.parse(fs.readFileSync(FAV_FILE, "utf8"));
+    return Array.isArray(a) ? a : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeFavs(a) {
+  fs.writeFileSync(FAV_FILE, JSON.stringify(a.slice(0, 50), null, 2));
+}
+
+function locFromBody(j) {
+  const la = Number(j.lat);
+  const lo = Number(j.lng);
+  if (!isFinite(la) || !isFinite(lo) || la < -90 || la > 90 || lo < -180 || lo > 180) return null;
+  const out = { latitude: la, longitude: lo };
+  ["altitude", "horizontalAccuracy", "verticalAccuracy"].forEach(function (key) {
+    const v = j[key];
+    if (v !== undefined && v !== null && v !== "" && isFinite(Number(v))) out[key] = Math.round(Number(v));
+  });
+  return out;
 }
 
 function send(res, code, type, body) {
@@ -85,6 +112,44 @@ function handler(req, res) {
     return send(res, 200, "application/json", JSON.stringify(readLoc()));
   }
 
+  // ---- 收藏位置：最多保存 50 个，最新在前 ----
+  if (url.pathname === "/favorites" && req.method === "GET") {
+    if (!checkToken(token, res)) return;
+    return send(res, 200, "application/json", JSON.stringify(readFavs()));
+  }
+
+  if (url.pathname === "/favorites" && req.method === "POST") {
+    if (!checkToken(token, res)) return;
+    let body = "";
+    req.on("data", function (c) { body += c; if (body.length > 1e4) req.destroy(); });
+    req.on("end", function () {
+      try {
+        const j = JSON.parse(body);
+        const loc = locFromBody(j);
+        if (!loc) return send(res, 400, "application/json", '{"error":"bad coords"}');
+        const fav = Object.assign(loc, {
+          id: String(Date.now()),
+          name: String(j.name || "收藏位置").trim().slice(0, 40) || "收藏位置"
+        });
+        const favs = readFavs().filter(function (x) { return x.id !== fav.id; });
+        favs.unshift(fav);
+        writeFavs(favs);
+        return send(res, 200, "application/json", JSON.stringify(favs));
+      } catch (e) {
+        return send(res, 400, "application/json", '{"error":"bad json"}');
+      }
+    });
+    return;
+  }
+
+  if (url.pathname.indexOf("/favorites/") === 0 && req.method === "DELETE") {
+    if (!checkToken(token, res)) return;
+    const id = decodeURIComponent(url.pathname.slice("/favorites/".length));
+    const favs = readFavs().filter(function (x) { return String(x.id) !== id; });
+    writeFavs(favs);
+    return send(res, 200, "application/json", JSON.stringify(favs));
+  }
+
   // ---- 网页保存（前端已转好 WGS-84 再发过来；海拔/精度可选） ----
   if (url.pathname === "/set" && req.method === "POST") {
     if (!checkToken(token, res)) return;
@@ -96,27 +161,9 @@ function handler(req, res) {
     req.on("end", function () {
       try {
         const j = JSON.parse(body);
-        const la = Number(j.lat);
-        const lo = Number(j.lng);
-        if (
-          !isFinite(la) || !isFinite(lo) ||
-          la < -90 || la > 90 || lo < -180 || lo > 180
-        ) {
-          return send(res, 400, "application/json", '{"error":"bad coords"}');
-        }
-        const cur = readLoc();
-        cur.enabled = true; // 保存一个新位置 = 开启伪造
-        cur.latitude = la;
-        cur.longitude = lo;
-        // 海拔/精度：脚本里都会被 Math.trunc 成整数，这里取整存
-        function setInt(key, v) {
-          if (v !== undefined && v !== null && v !== "" && isFinite(Number(v))) {
-            cur[key] = Math.round(Number(v));
-          }
-        }
-        setInt("altitude", j.altitude);
-        setInt("horizontalAccuracy", j.horizontalAccuracy);
-        setInt("verticalAccuracy", j.verticalAccuracy);
+        const loc = locFromBody(j);
+        if (!loc) return send(res, 400, "application/json", '{"error":"bad coords"}');
+        const cur = Object.assign(readLoc(), loc, { enabled: true }); // 保存一个新位置 = 开启伪造
         writeLoc(cur);
         return send(res, 200, "application/json", JSON.stringify(cur));
       } catch (e) {
@@ -169,6 +216,11 @@ function onListenError(err) {
 }
 
 function start() {
+  if (!TOKEN) {
+    console.error("启动失败：必须设置 TOKEN 环境变量，不能使用空口令。");
+    process.exit(1);
+  }
+
   if (CERT && KEY) {
     try {
       const opts = { cert: fs.readFileSync(CERT), key: fs.readFileSync(KEY) };
@@ -182,8 +234,8 @@ function start() {
           console.log("cert reload failed: " + e.message);
         }
       }, 12 * 3600 * 1000);
-      server.listen(PORT, function () {
-        console.log("location picker (https) listening on :" + PORT);
+      server.listen(PORT, HOST, function () {
+        console.log("location picker (https) listening on " + HOST + ":" + PORT);
       });
       return;
     } catch (e) {
@@ -192,8 +244,8 @@ function start() {
   }
   const server = http.createServer(handler);
   server.on("error", onListenError);
-  server.listen(PORT, function () {
-    console.log("location picker (http) listening on :" + PORT);
+  server.listen(PORT, HOST, function () {
+    console.log("location picker (http) listening on " + HOST + ":" + PORT);
   });
 }
 
@@ -222,7 +274,14 @@ const PAGE = `<!doctype html>
   .opts label{font-size:13px;color:#444;display:flex;flex-direction:column}
   .opts input{width:88px;padding:8px;font-size:15px;border:1px solid #ccc;border-radius:6px;margin-top:2px}
   #savebtn{padding:11px 20px;font-size:16px;border:0;border-radius:8px;background:#34c759;color:#fff;font-weight:600}
+  #favbtn{padding:11px 16px;font-size:15px;border:0;border-radius:8px;background:#5856d6;color:#fff}
   #restorebtn{padding:11px 16px;font-size:15px;border:0;border-radius:8px;background:#8e8e93;color:#fff}
+  .favs{margin:0 10px 12px;border:1px solid #e2e2e2;border-radius:8px;max-height:24vh;overflow:auto}
+  .favrow{padding:9px 10px;border-bottom:1px solid #eee;display:flex;gap:8px;align-items:center;font-size:13px}
+  .favrow:last-child{border-bottom:0}
+  .favrow span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .favrow button{border:0;border-radius:6px;padding:7px 9px;color:#fff;background:#007aff}
+  .favrow button.del{background:#ff3b30}
   .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
     background:rgba(0,0,0,.85);color:#fff;padding:10px 16px;border-radius:8px;
     font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999}
@@ -242,8 +301,10 @@ const PAGE = `<!doctype html>
   <label>水平精度<input id="hacc" type="number" inputmode="numeric"></label>
   <label>垂直精度<input id="vacc" type="number" inputmode="numeric"></label>
   <button id="savebtn">保存定位</button>
+  <button id="favbtn">收藏当前位置</button>
   <button id="restorebtn">恢复真实定位</button>
 </div>
+<div class="favs" id="favs"></div>
 <div class="toast" id="toast"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -353,6 +414,38 @@ function commit(){
     .catch(function(){ toast("网络错误"); });
 }
 
+function favPayload(){
+  return {lat:WGS.lat, lng:WGS.lng, altitude:numOrNull("alt"),
+    horizontalAccuracy:numOrNull("hacc"), verticalAccuracy:numOrNull("vacc")};
+}
+
+function renderFavs(a){
+  var box=$("favs"); box.innerHTML="";
+  if(!a||!a.length){ box.innerHTML="<div class='favrow'><span>暂无收藏位置</span></div>"; return; }
+  a.forEach(function(f){
+    var row=document.createElement("div"), name=document.createElement("span"), use=document.createElement("button"), del=document.createElement("button");
+    row.className="favrow";
+    name.textContent=f.name+" · "+Number(f.latitude).toFixed(5)+", "+Number(f.longitude).toFixed(5);
+    use.textContent="载入"; del.textContent="删除"; del.className="del";
+    use.onclick=function(){
+      WGS={lat:Number(f.latitude), lng:Number(f.longitude)};
+      ["altitude","horizontalAccuracy","verticalAccuracy"].forEach(function(k){ var id={altitude:"alt",horizontalAccuracy:"hacc",verticalAccuracy:"vacc"}[k]; if(f[k]!==undefined)$(id).value=f[k]; });
+      var p=dispPos(); marker.setLatLng(p); map.setView(p,15); saved=false; enabledState=true; updateEnabledUI(); toast("已载入收藏，点保存定位生效");
+    };
+    del.onclick=function(){ fetch("/favorites/"+encodeURIComponent(f.id)+"?token="+encodeURIComponent(token),{method:"DELETE"}).then(function(r){return r.json();}).then(renderFavs).catch(function(){toast("删除失败");}); };
+    row.appendChild(name); row.appendChild(use); row.appendChild(del); box.appendChild(row);
+  });
+}
+
+function loadFavs(){ fetch("/favorites?token="+encodeURIComponent(token)).then(function(r){return r.json();}).then(renderFavs).catch(function(){renderFavs([]);}); }
+
+function addFav(){
+  var name=prompt("收藏名称", "位置 "+new Date().toLocaleString()); if(name===null) return;
+  var p=favPayload(); p.name=name;
+  fetch("/favorites?token="+encodeURIComponent(token),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)})
+    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); }).then(function(a){renderFavs(a); toast("已收藏");}).catch(function(){toast("收藏失败");});
+}
+
 // 搜索：列出多个候选，点选只移动地图视野（不动定位点、不保存）
 function search(){
   var q=$("q").value.trim(); if(!q) return;
@@ -380,7 +473,15 @@ function search(){
 }
 
 function load(){
-  fetch("/loc.json?token="+encodeURIComponent(token)).then(function(r){return r.json();}).then(function(d){
+  if(!token){
+    $("info").textContent="URL 缺少 token：请用 /?token=你的TOKEN 打开，否则不能加载/保存定位。";
+    return;
+  }
+  fetch("/loc.json?token="+encodeURIComponent(token)).then(function(r){
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return r.json();
+  }).then(function(d){
+    if(!isFinite(Number(d.latitude)) || !isFinite(Number(d.longitude))) throw new Error("bad loc.json");
     WGS={lat:d.latitude, lng:d.longitude};
     saved=true;
     enabledState=(d.enabled!==false);
@@ -409,12 +510,14 @@ function load(){
     map.on("baselayerchange",function(e){datum=e.layer.datum||"wgs"; var p=dispPos(); marker.setLatLng(p); map.setView(p,map.getZoom()); info();});
     map.on("click",function(e){movePin(e.latlng.lat,e.latlng.lng);});
     marker.on("dragend",function(){var p=marker.getLatLng(); movePin(p.lat,p.lng);});
+    loadFavs();
   }).catch(function(){$("info").textContent="加载失败，检查 token 是否正确";});
 }
 
 $("btn").addEventListener("click",search);
 $("q").addEventListener("keydown",function(e){if(e.key==="Enter")search();});
 $("savebtn").addEventListener("click",commit);
+$("favbtn").addEventListener("click",addFav);
 $("restorebtn").addEventListener("click",toggleEnabled);
 load();
 </script>
