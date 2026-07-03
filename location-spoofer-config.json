@@ -9,6 +9,24 @@
   "unknownValue4": 3,
   "motionActivityType": 63,
   "motionActivityConfidence": 467,
+  "scheduleTimeZone": "Asia/Singapore",
+  "schedules": [
+    {
+      "id": "weekday-office",
+      "enabled": true,
+      "start": "09:00",
+      "end": "17:00",
+      "days": [1, 2, 3, 4, 5],
+      "favoriteName": "办公室",
+      "location": {
+        "latitude": 37.3349,
+        "longitude": -122.00902,
+        "altitude": 530,
+        "horizontalAccuracy": 39,
+        "verticalAccuracy": 1000
+      }
+    }
+  ],
   "failOpen": true,
   "debug": false
 }

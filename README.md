@@ -16,6 +16,7 @@
 - **蜂窝基站坐标修改** — 原版 Go 只改了 WiFi 热点坐标，JS 版额外处理了 CellTower（字段 22/24）的坐标替换
 - **多响应格式兼容** — 自动检测 Apple 回应的封装格式（ARPC / synthetic / marker / bare），确保改后还能被 iOS 正确识别
 - **运动状态伪造** — 一并改写 motionActivityType 和 motionActivityConfidence，减少被系统识破的可能
+- **定时开关** — 远程配置可设置多条按星期重复的时间段，时间段内伪造定位，时间段外放行真实定位
 
 ## 怎么回事
 
@@ -105,6 +106,38 @@ Loon 插件 **远程配置 URL** 示例：
 ```
 https://你的worker.workers.dev/loc.json?token=你的TOKEN
 ```
+
+### 定时开关
+
+`loc.json` 支持 `schedules`。只要存在至少一条启用的时间段，脚本就会按 `Asia/Singapore` 时间判断：命中任意时间段才伪造定位，时间段外恢复真实定位。没有启用的时间段时，沿用原来的 `enabled` 开关。
+
+每条时间段可以保存一个收藏位置的坐标快照。命中后脚本直接使用规则内的 `location`，不会再去读收藏夹；收藏被删除也不影响已保存的定时规则。多个时间段同时命中时，列表里第一条命中的规则优先。
+
+```json
+{
+  "enabled": true,
+  "scheduleTimeZone": "Asia/Singapore",
+  "schedules": [
+    {
+      "id": "weekday-office",
+      "enabled": true,
+      "start": "09:00",
+      "end": "17:00",
+      "days": [1, 2, 3, 4, 5],
+      "favoriteName": "办公室",
+      "location": {
+        "latitude": 37.3349,
+        "longitude": -122.00902,
+        "altitude": 530,
+        "horizontalAccuracy": 39,
+        "verticalAccuracy": 1000
+      }
+    }
+  ]
+}
+```
+
+`days` 使用 ISO 星期：`1=周一`，`7=周日`。跨午夜时间段会归到开始那一天，例如周一 `22:00` 到 `02:00` 覆盖周一晚和周二凌晨。
 
 ## 友情链接
 

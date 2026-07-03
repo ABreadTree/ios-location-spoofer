@@ -20,6 +20,8 @@
     unknownValue4: 3,
     motionActivityType: 63,
     motionActivityConfidence: 467,
+    scheduleTimeZone: "Asia/Singapore",
+    schedules: [],
     failOpen: true,
     debug: false,
     dumpRaw: false,
@@ -430,6 +432,134 @@
     return defaultValue;
   }
 
+  function parseTimeMinutes(value) {
+    var match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+    if (!match) {
+      return null;
+    }
+    var hour = Number(match[1]);
+    var minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+    return hour * 60 + minute;
+  }
+
+  function singaporeClock(date) {
+    var shifted = new Date((date || new Date()).getTime() + 8 * 60 * 60 * 1000);
+    var day = shifted.getUTCDay();
+    return {
+      day: day === 0 ? 7 : day,
+      minute: shifted.getUTCHours() * 60 + shifted.getUTCMinutes()
+    };
+  }
+
+  function previousIsoDay(day) {
+    return day === 1 ? 7 : day - 1;
+  }
+
+  function includesDay(days, day) {
+    if (!Array.isArray(days)) {
+      return false;
+    }
+    for (var i = 0; i < days.length; i += 1) {
+      if (Number(days[i]) === day) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function scheduleMatches(rule, clock) {
+    if (!rule || rule.enabled === false) {
+      return false;
+    }
+    var start = parseTimeMinutes(rule.start);
+    var end = parseTimeMinutes(rule.end);
+    if (start == null || end == null || start === end) {
+      return false;
+    }
+    if (start < end) {
+      return includesDay(rule.days, clock.day) && clock.minute >= start && clock.minute < end;
+    }
+    return (
+      (includesDay(rule.days, clock.day) && clock.minute >= start) ||
+      (includesDay(rule.days, previousIsoDay(clock.day)) && clock.minute < end)
+    );
+  }
+
+  function hasEnabledSchedule(schedules) {
+    if (!Array.isArray(schedules)) {
+      return false;
+    }
+    for (var i = 0; i < schedules.length; i += 1) {
+      if (schedules[i] && schedules[i].enabled !== false) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function effectiveScheduleEnabled(config, date) {
+    var enabled = parseBoolean(config && config.enabled, true);
+    if (!enabled) {
+      return false;
+    }
+    var schedules = config && Array.isArray(config.schedules) ? config.schedules : [];
+    if (!hasEnabledSchedule(schedules)) {
+      return true;
+    }
+    return !!matchingSchedule(config, date);
+  }
+
+  function matchingSchedule(config, date) {
+    var schedules = config && Array.isArray(config.schedules) ? config.schedules : [];
+    var clock = singaporeClock(date);
+    for (var i = 0; i < schedules.length; i += 1) {
+      if (scheduleMatches(schedules[i], clock)) {
+        return schedules[i];
+      }
+    }
+    return null;
+  }
+
+  function copyScheduleLocation(cfg, rule) {
+    var loc = rule && rule.location;
+    if (!loc) {
+      return;
+    }
+    ["latitude", "longitude", "altitude", "horizontalAccuracy", "verticalAccuracy"].forEach(function (key) {
+      if (loc[key] !== undefined && loc[key] !== null && loc[key] !== "") {
+        cfg[key] = loc[key];
+      }
+    });
+  }
+
+  function applyScheduleConfig(config, date) {
+    var cfg = {};
+    var key;
+    config = config || {};
+    for (key in config) {
+      if (Object.prototype.hasOwnProperty.call(config, key)) {
+        cfg[key] = config[key];
+      }
+    }
+    if (!parseBoolean(cfg.enabled, true)) {
+      cfg.enabled = false;
+      return cfg;
+    }
+    if (!hasEnabledSchedule(cfg.schedules)) {
+      cfg.enabled = true;
+      return cfg;
+    }
+    var match = matchingSchedule(cfg, date);
+    cfg.enabled = !!match;
+    if (match) {
+      copyScheduleLocation(cfg, match);
+    }
+    return cfg;
+  }
+
   function normalizeConfig(input) {
     var cfg = {};
     var key;
@@ -446,6 +576,9 @@
     }
 
     cfg.enabled = parseBoolean(cfg.enabled, true);
+    cfg.scheduleTimeZone = "Asia/Singapore";
+    cfg.schedules = Array.isArray(cfg.schedules) ? cfg.schedules : [];
+    cfg = applyScheduleConfig(cfg, new Date());
     cfg.failOpen = parseBoolean(cfg.failOpen, true);
     var mode = String(cfg.mode || "response").toLowerCase();
     cfg.mode = mode === "request" || mode === "prepare" || mode === "probe" || mode === "inspect" ? mode : "response";
@@ -1850,6 +1983,9 @@
 
     loadRuntimeConfig(function (config) {
       try {
+        if (config.debug && hasEnabledSchedule(config.schedules)) {
+          console.log("Location spoofer schedule active: " + config.enabled + " (Asia/Singapore)");
+        }
         if (!config.enabled) {
           donePassThrough();
           return;
@@ -1963,6 +2099,9 @@
     locationSummary: locationSummary,
     patchedPayloadSummary: patchedPayloadSummary,
     coordToInt: coordToInt,
+    applyScheduleConfig: applyScheduleConfig,
+    effectiveScheduleEnabled: effectiveScheduleEnabled,
+    scheduleMatches: scheduleMatches,
     normalizeConfig: normalizeConfig,
     patchLocation: patchLocation,
     patchWifiDevice: patchWifiDevice,

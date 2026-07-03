@@ -9,6 +9,9 @@
 | `/` | GET | 地图选点网页（URL 加 `?token=` 才能保存） |
 | `/loc.json?token=` | GET | 读取坐标 JSON |
 | `/set?token=` | POST | 保存坐标 |
+| `/favorites?token=` | GET / POST | 读取 / 新增收藏位置 |
+| `/favorites/:id?token=` | DELETE | 删除收藏位置 |
+| `/schedule?token=` | POST | 保存定时开关时间段 |
 | `/health` | GET | 健康检查（无需 token） |
 
 ## 部署
@@ -61,6 +64,8 @@ https://ios-location-picker.你的账号.workers.dev/?token=你的TOKEN
 ```
 
 点地图 → **保存定位** → 关开 iPhone 定位服务生效（Loon 约 60 秒内刷新缓存）。
+
+网页里的 **定时开关** 可保存多条时间段，并从收藏位置下拉选择命中时使用的坐标。保存时会把收藏坐标复制到规则内；脚本只读 `loc.json`，收藏之后删除也不影响规则。只要存在至少一条启用的时间段，脚本会按 `Asia/Singapore` 时间判断：命中任意时间段才伪造定位，时间段外恢复真实定位。`days` 使用 `1=周一` 到 `7=周日`，跨午夜时间段归到开始那一天；多条同时命中时列表靠前的规则优先。
 
 ## Shadowrocket 配置
 

@@ -39,7 +39,9 @@ const DEFAULT = {
   longitude: -122.00902,
   altitude: 530,
   horizontalAccuracy: 39,
-  verticalAccuracy: 1000
+  verticalAccuracy: 1000,
+  scheduleTimeZone: "Asia/Singapore",
+  schedules: []
 };
 
 function readLoc() {
@@ -77,6 +79,45 @@ function locFromBody(j) {
     if (v !== undefined && v !== null && v !== "" && isFinite(Number(v))) out[key] = Math.round(Number(v));
   });
   return out;
+}
+
+function validTime(value) {
+  return /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(value || "").trim());
+}
+
+function locFromSchedule(s) {
+  const loc = s && s.location;
+  if (!loc) return null;
+  const la = Number(loc.latitude);
+  const lo = Number(loc.longitude);
+  if (!isFinite(la) || !isFinite(lo) || la < -90 || la > 90 || lo < -180 || lo > 180) return null;
+  const out = { latitude: la, longitude: lo };
+  ["altitude", "horizontalAccuracy", "verticalAccuracy"].forEach(function (key) {
+    const v = loc[key];
+    if (v !== undefined && v !== null && v !== "" && isFinite(Number(v))) out[key] = Math.round(Number(v));
+  });
+  return out;
+}
+
+function schedulesFromBody(j) {
+  if (!Array.isArray(j.schedules)) return null;
+  return j.schedules.slice(0, 20).map(function (s, i) {
+    const days = Array.isArray(s.days) ? s.days.map(Number).filter(function (d, idx, a) {
+      return d >= 1 && d <= 7 && a.indexOf(d) === idx;
+    }) : [];
+    const out = {
+      id: String(s.id || Date.now() + "-" + i),
+      enabled: s.enabled !== false,
+      start: validTime(s.start) ? String(s.start).trim() : "09:00",
+      end: validTime(s.end) ? String(s.end).trim() : "17:00",
+      days: days
+    };
+    if (s.favoriteId != null) out.favoriteId = String(s.favoriteId).slice(0, 80);
+    if (s.favoriteName != null) out.favoriteName = String(s.favoriteName).trim().slice(0, 40);
+    const loc = locFromSchedule(s);
+    if (loc) out.location = loc;
+    return out;
+  });
 }
 
 function send(res, code, type, body) {
@@ -195,6 +236,30 @@ function handler(req, res) {
     return;
   }
 
+  // ---- 定时开关：保存多条时间段 ----
+  if (url.pathname === "/schedule" && req.method === "POST") {
+    if (!checkToken(token, res)) return;
+    let body = "";
+    req.on("data", function (c) {
+      body += c;
+      if (body.length > 2e4) req.destroy();
+    });
+    req.on("end", function () {
+      try {
+        const schedules = schedulesFromBody(JSON.parse(body));
+        if (!schedules) return send(res, 400, "application/json", '{"error":"bad schedules"}');
+        const cur = readLoc();
+        cur.scheduleTimeZone = "Asia/Singapore";
+        cur.schedules = schedules;
+        writeLoc(cur);
+        return send(res, 200, "application/json", JSON.stringify(cur));
+      } catch (e) {
+        return send(res, 400, "application/json", '{"error":"bad json"}');
+      }
+    });
+    return;
+  }
+
   // ---- 地图网页 ----
   if (url.pathname === "/" && req.method === "GET") {
     return send(res, 200, "text/html; charset=utf-8", PAGE);
@@ -276,6 +341,16 @@ const PAGE = `<!doctype html>
   #savebtn{padding:11px 20px;font-size:16px;border:0;border-radius:8px;background:#34c759;color:#fff;font-weight:600}
   #favbtn{padding:11px 16px;font-size:15px;border:0;border-radius:8px;background:#5856d6;color:#fff}
   #restorebtn{padding:11px 16px;font-size:15px;border:0;border-radius:8px;background:#8e8e93;color:#fff}
+  .schedule{margin:0 10px 12px;border:1px solid #e2e2e2;border-radius:8px;padding:10px;font-size:13px}
+  .schedtop{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .schedtop b{flex:1}
+  .schedtop button,.schedrow button{border:0;border-radius:6px;padding:7px 9px;color:#fff;background:#007aff}
+  .schedrow{display:flex;flex-wrap:wrap;gap:7px;align-items:center;padding:8px 0;border-top:1px solid #eee}
+  .schedrow select{width:130px;padding:7px;border:1px solid #ccc;border-radius:6px;background:#fff}
+  .schedrow input[type="time"]{width:95px;padding:6px;border:1px solid #ccc;border-radius:6px}
+  .days{display:flex;gap:5px;flex-wrap:wrap}
+  .days label{display:flex;gap:2px;align-items:center;color:#444}
+  .schedrow button.del{background:#ff3b30}
   .favs{margin:0 10px 12px;border:1px solid #e2e2e2;border-radius:8px;max-height:24vh;overflow:auto}
   .favrow{padding:9px 10px;border-bottom:1px solid #eee;display:flex;gap:8px;align-items:center;font-size:13px}
   .favrow:last-child{border-bottom:0}
@@ -303,6 +378,10 @@ const PAGE = `<!doctype html>
   <button id="savebtn">保存定位</button>
   <button id="favbtn">收藏当前位置</button>
   <button id="restorebtn">恢复真实定位</button>
+</div>
+<div class="schedule">
+  <div class="schedtop"><b>定时开关</b><button id="addschedule">新增</button><button id="saveschedules">保存</button></div>
+  <div id="schedules"></div>
 </div>
 <div class="favs" id="favs"></div>
 <div class="toast" id="toast"></div>
@@ -349,6 +428,8 @@ var WGS = {lat:0, lng:0};   // 当前“定位点(图钉)”的真值 WGS-84（�
 var datum = "gcj";          // 当前底图坐标系：'gcj'(高德) 或 'wgs'(OSM)
 var saved = true;           // 图钉当前位置是否已保存到设备
 var enabledState = true;    // true=伪造中；false=已恢复真实定位（脚本放行）
+var schedules = [];
+var favorites = [];
 
 function $(id){return document.getElementById(id);}
 function toast(t){var e=$("toast");e.textContent=t;e.classList.add("show");setTimeout(function(){e.classList.remove("show");},1800);}
@@ -370,6 +451,75 @@ function updateEnabledUI(){
   if(enabledState){ b.textContent="恢复真实定位"; b.style.background="#8e8e93"; }
   else { b.textContent="● 重新开启伪造"; b.style.background="#ff9500"; }
   info();
+}
+
+function defaultSchedule(){
+  return {id:String(Date.now()), enabled:true, start:"09:00", end:"17:00", days:[1,2,3,4,5]};
+}
+
+function locFromFav(f){
+  if(!f)return null;
+  var loc={latitude:Number(f.latitude), longitude:Number(f.longitude)};
+  ["altitude","horizontalAccuracy","verticalAccuracy"].forEach(function(k){ if(f[k]!==undefined)loc[k]=Number(f[k]); });
+  return isFinite(loc.latitude)&&isFinite(loc.longitude)?loc:null;
+}
+
+function locFromCurrent(){
+  return {latitude:WGS.lat, longitude:WGS.lng, altitude:numOrNull("alt"), horizontalAccuracy:numOrNull("hacc"), verticalAccuracy:numOrNull("vacc")};
+}
+
+function syncScheduleLocation(s, favId){
+  if(favId==="__current"){ s.favoriteId=""; s.favoriteName="当前定位"; s.location=locFromCurrent(); return; }
+  var f=favorites.filter(function(x){return String(x.id)===String(favId);})[0];
+  if(f){ s.favoriteId=String(f.id); s.favoriteName=f.name||"收藏位置"; s.location=locFromFav(f); }
+}
+
+function cleanSchedules(){
+  return schedules.map(function(s, i){
+    var days=Array.isArray(s.days)?s.days.map(Number).filter(function(d, idx, a){return d>=1&&d<=7&&a.indexOf(d)===idx;}):[];
+    var out={id:String(s.id||Date.now()+"-"+i), enabled:s.enabled!==false, start:s.start||"09:00", end:s.end||"17:00", days:days};
+    if(s.favoriteId)out.favoriteId=String(s.favoriteId);
+    if(s.favoriteName)out.favoriteName=String(s.favoriteName);
+    if(s.location)out.location=s.location;
+    return out;
+  });
+}
+
+function renderSchedules(){
+  var box=$("schedules"); box.innerHTML="";
+  if(!schedules.length){ var empty=document.createElement("div"); empty.className="schedrow"; empty.textContent="未设置定时，沿用上方开关"; box.appendChild(empty); return; }
+  schedules.forEach(function(s, idx){
+    var row=document.createElement("div"), on=document.createElement("input"), fav=document.createElement("select"), start=document.createElement("input"), end=document.createElement("input"), days=document.createElement("div"), del=document.createElement("button");
+    row.className="schedrow"; on.type="checkbox"; on.checked=s.enabled!==false; on.onchange=function(){s.enabled=on.checked;};
+    [{id:"__current",name:"沿用当前定位"}].concat(favorites).forEach(function(f){
+      var opt=document.createElement("option"); opt.value=String(f.id); opt.textContent=f.name||"收藏位置"; fav.appendChild(opt);
+    });
+    if(s.favoriteId && !favorites.some(function(f){return String(f.id)===String(s.favoriteId); })){
+      var old=document.createElement("option"); old.value=String(s.favoriteId); old.textContent=s.favoriteName||"已保存定位"; fav.appendChild(old);
+    }
+    fav.value=s.favoriteId?String(s.favoriteId):"__current";
+    fav.onchange=function(){ syncScheduleLocation(s, fav.value); };
+    start.type="time"; start.value=s.start||"09:00"; start.onchange=function(){s.start=start.value;};
+    end.type="time"; end.value=s.end||"17:00"; end.onchange=function(){s.end=end.value;};
+    days.className="days";
+    ["一","二","三","四","五","六","日"].forEach(function(label, i){
+      var wrap=document.createElement("label"), cb=document.createElement("input"), day=i+1;
+      cb.type="checkbox"; cb.checked=Array.isArray(s.days)&&s.days.map(Number).indexOf(day)>=0;
+      cb.onchange=function(){ var set=Array.isArray(s.days)?s.days.map(Number):[]; if(cb.checked&&set.indexOf(day)<0)set.push(day); if(!cb.checked)set=set.filter(function(d){return d!==day;}); s.days=set; };
+      wrap.appendChild(cb); wrap.appendChild(document.createTextNode(label)); days.appendChild(wrap);
+    });
+    del.textContent="删除"; del.className="del"; del.onclick=function(){schedules.splice(idx,1); renderSchedules();};
+    row.appendChild(on); row.appendChild(fav); row.appendChild(start); row.appendChild(end); row.appendChild(days); row.appendChild(del); box.appendChild(row);
+  });
+}
+
+function saveSchedules(){
+  schedules.forEach(function(s){ if(!s.location) syncScheduleLocation(s, s.favoriteId || "__current"); });
+  schedules=cleanSchedules();
+  fetch("/schedule?token="+encodeURIComponent(token),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({schedules:schedules})})
+    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function(d){ schedules=Array.isArray(d.schedules)?d.schedules:[]; renderSchedules(); toast("定时已保存"); })
+    .catch(function(){ toast("定时保存失败"); });
 }
 
 // 一键切换 伪造/恢复真实
@@ -432,18 +582,18 @@ function renderFavs(a){
       ["altitude","horizontalAccuracy","verticalAccuracy"].forEach(function(k){ var id={altitude:"alt",horizontalAccuracy:"hacc",verticalAccuracy:"vacc"}[k]; if(f[k]!==undefined)$(id).value=f[k]; });
       var p=dispPos(); marker.setLatLng(p); map.setView(p,15); saved=false; enabledState=true; updateEnabledUI(); toast("已载入收藏，点保存定位生效");
     };
-    del.onclick=function(){ fetch("/favorites/"+encodeURIComponent(f.id)+"?token="+encodeURIComponent(token),{method:"DELETE"}).then(function(r){return r.json();}).then(renderFavs).catch(function(){toast("删除失败");}); };
+    del.onclick=function(){ fetch("/favorites/"+encodeURIComponent(f.id)+"?token="+encodeURIComponent(token),{method:"DELETE"}).then(function(r){return r.json();}).then(function(a){favorites=Array.isArray(a)?a:[]; renderFavs(favorites); renderSchedules();}).catch(function(){toast("删除失败");}); };
     row.appendChild(name); row.appendChild(use); row.appendChild(del); box.appendChild(row);
   });
 }
 
-function loadFavs(){ fetch("/favorites?token="+encodeURIComponent(token)).then(function(r){return r.json();}).then(renderFavs).catch(function(){renderFavs([]);}); }
+function loadFavs(){ fetch("/favorites?token="+encodeURIComponent(token)).then(function(r){return r.json();}).then(function(a){favorites=Array.isArray(a)?a:[]; renderFavs(favorites); renderSchedules();}).catch(function(){favorites=[]; renderFavs([]); renderSchedules();}); }
 
 function addFav(){
   var name=prompt("收藏名称", "位置 "+new Date().toLocaleString()); if(name===null) return;
   var p=favPayload(); p.name=name;
   fetch("/favorites?token="+encodeURIComponent(token),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)})
-    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); }).then(function(a){renderFavs(a); toast("已收藏");}).catch(function(){toast("收藏失败");});
+    .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); }).then(function(a){favorites=Array.isArray(a)?a:[]; renderFavs(favorites); renderSchedules(); toast("已收藏");}).catch(function(){toast("收藏失败");});
 }
 
 // 搜索：列出多个候选，点选只移动地图视野（不动定位点、不保存）
@@ -485,6 +635,7 @@ function load(){
     WGS={lat:d.latitude, lng:d.longitude};
     saved=true;
     enabledState=(d.enabled!==false);
+    schedules=Array.isArray(d.schedules)?d.schedules:[];
     $("alt").value=(d.altitude!==undefined?d.altitude:"");
     $("hacc").value=(d.horizontalAccuracy!==undefined?d.horizontalAccuracy:39);
     $("vacc").value=(d.verticalAccuracy!==undefined?d.verticalAccuracy:1000);
@@ -519,6 +670,8 @@ $("q").addEventListener("keydown",function(e){if(e.key==="Enter")search();});
 $("savebtn").addEventListener("click",commit);
 $("favbtn").addEventListener("click",addFav);
 $("restorebtn").addEventListener("click",toggleEnabled);
+$("addschedule").addEventListener("click",function(){schedules.push(defaultSchedule()); renderSchedules();});
+$("saveschedules").addEventListener("click",saveSchedules);
 load();
 </script>
 </body>
