@@ -12,8 +12,8 @@
   var DEFAULT_CONFIG = {
     enabled: true,
     mode: "response",
-    latitude: 30.271287,
-    longitude: 120.200676,
+    latitude: 30.268875673602984,
+    longitude: 120.20523806751362,
     horizontalAccuracy: 39,
     verticalAccuracy: 1000,
     altitude: 30,
