@@ -37,7 +37,7 @@ http:
 # 模式 A：远程 URL（默认）
 script-providers:
   ios-location-spoofer:
-    url: https://raw.githubusercontent.com/mekos2772/ios-location-spoofer/main/location-spoofer.js
+    url: https://raw.githubusercontent.com/ABreadTree/ios-location-spoofer/other/location-spoofer.js
     interval: 86400
 
 # 模式 B：本地 path（仅 DNS 受限环境启用）
